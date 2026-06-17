@@ -1,0 +1,12 @@
+# 视觉助手(brainstorm)临时产物
+.superpowers/
+
+# 依赖 / 构建产物
+node_modules/
+dist/
+build/
+
+# 系统
+Thumbs.db
+.DS_Store
+*.log
