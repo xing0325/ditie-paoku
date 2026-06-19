@@ -17,12 +17,203 @@
 <canvas id="c"></canvas>
 <script type="module">
 import * as THREE from 'three';
-// ===== src/logic/lanes.js =====
-const LANE_COUNT = 3;
-const LANE_GAP = 4;              // 相邻车道 x 间距
-function laneX(i) { return (i - 1) * LANE_GAP; }
-function clampLane(i) { return Math.max(0, Math.min(LANE_COUNT - 1, i)); }
-function nextLane(current, dir) { return clampLane(current + Math.sign(dir)); }
+// ===== src/corpses.js =====
+// 一具瘫软的尸体(低面):横躺的身体 + 偏置的头
+function crumpled(toon, color) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.7, 3, 6), toon(color));
+  body.rotation.z = Math.PI / 2; body.position.y = 0.32; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 8, 6), toon(color));
+  head.position.set(0.7, 0.3, 0); g.add(head);
+  return g;
+}
+
+// 尸堆系统:① 散落地面、随世界滚动回收的尸体 ② 车头逐渐堆高的"尸体排障器"
+function createCorpses(scene, toon, trainGroup) {
+  const ground = [];
+  const pool = [];
+  const pile = new THREE.Group();
+  pile.position.set(0, 0, -2.9);   // 挂在车头,随车一起切道
+  trainGroup.add(pile);
+  let pileN = 0;
+  const PILE_MAX = 16;
+
+  function addGround(x, z) {
+    const c = pool.pop() || crumpled(toon, 0x8f9298);
+    c.visible = true;
+    c.position.set(x, 0, z);
+    c.rotation.y = Math.random() * Math.PI * 2;
+    scene.add(c);
+    ground.push(c);
+  }
+
+  function bumpPile() {
+    if (pileN >= PILE_MAX) return;
+    const b = crumpled(toon, 0x86898f);
+    b.position.set((Math.random() - 0.5) * 2.6, 0.3 + Math.random() * 1.8, (Math.random() - 0.5) * 1.1);
+    b.rotation.set(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
+    b.scale.setScalar(0.78);
+    pile.add(b);
+    pileN++;
+  }
+
+  function update(speed) {
+    for (let i = ground.length - 1; i >= 0; i--) {
+      const c = ground[i];
+      c.position.z += speed;
+      if (c.position.z > 14) {
+        c.visible = false; scene.remove(c); pool.push(c); ground.splice(i, 1);
+      }
+    }
+  }
+
+  function reset() {
+    for (const c of ground.splice(0)) { c.visible = false; scene.remove(c); pool.push(c); }
+    for (const b of [...pile.children]) pile.remove(b);
+    pileN = 0;
+  }
+
+  return { addGround, bumpPile, update, reset, get pileN() { return pileN; } };
+}
+
+// ===== src/feedback.js =====
+// 撞击反馈:镜头震 + 冻帧(hit-stop)+ 慢动作 + 抛飞布娃娃 + 血粒子(随血腥度模式)
+function createFeedback(camera, scene, toon, getGore) {
+  let shake = 0;
+  const base = camera.position.clone();
+  const flying = [];     // 被撞飞的小人
+  const bits = [];       // 血粒子
+  const bitPool = [];
+  let hitstop = 0;       // 冻帧计数
+  let slow = 1;          // 慢动作因子(缓回 1)
+
+  function bloodBit() {
+    return bitPool.pop()
+      || new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.18),
+                        new THREE.MeshBasicMaterial({ color: 0xc0241f }));
+  }
+
+  function spawnBlood(pos, mode) {
+    const n = mode === 'realistic' ? 16 : 7;
+    const col = mode === 'realistic' ? 0x6b0d10 : 0xc0241f;
+    const scl = mode === 'realistic' ? 0.8 : 1.2;
+    const life = mode === 'realistic' ? 64 : 34;
+    for (let i = 0; i < n; i++) {
+      const m = bloodBit();
+      m.material.color.setHex(col);
+      m.scale.setScalar(scl * (0.5 + Math.random()));
+      m.position.copy(pos).add(new THREE.Vector3((Math.random() - 0.5) * 0.8, 1.0 + Math.random() * 0.6, 0));
+      m.userData.v = new THREE.Vector3((Math.random() - 0.5) * 0.5, 0.25 + Math.random() * 0.45, 0.12 + Math.random() * 0.3);
+      m.userData.life = life;
+      m.visible = true; scene.add(m); bits.push(m);
+    }
+  }
+
+  return {
+    hit(mesh) {
+      shake = Math.min(1.0, shake + 0.32);
+      hitstop = Math.max(hitstop, 3);
+      slow = 0.32;
+      mesh.userData.vel = new THREE.Vector3((Math.random() - 0.5) * 0.45, 0.42, 0.32);
+      mesh.userData.spin = (Math.random() - 0.5) * 0.6;
+      flying.push(mesh);
+      spawnBlood(mesh.position, getGore ? getGore() : 'stylized');
+    },
+    // 每帧调一次:冻帧时近乎停住,之后从慢动作缓回正常
+    timeScale() {
+      if (hitstop > 0) { hitstop--; return 0.05; }
+      slow += (1 - slow) * 0.1;
+      return slow;
+    },
+    update() {
+      camera.position.set(
+        base.x + (Math.random() - 0.5) * shake,
+        base.y + (Math.random() - 0.5) * shake,
+        base.z + (Math.random() - 0.5) * shake * 0.5);
+      shake *= 0.84; if (shake < 0.01) { shake = 0; camera.position.copy(base); }
+
+      for (let i = flying.length - 1; i >= 0; i--) {
+        const m = flying[i];
+        m.userData.vel.y -= 0.03;
+        m.position.add(m.userData.vel);
+        m.rotation.z += m.userData.spin; m.rotation.x += m.userData.spin * 0.5;
+        if (m.position.y < -2) { scene.remove(m); flying.splice(i, 1); }
+      }
+      for (let i = bits.length - 1; i >= 0; i--) {
+        const m = bits[i];
+        m.userData.v.y -= 0.025;
+        m.position.add(m.userData.v);
+        if (m.position.y < 0.05) { m.position.y = 0.05; m.userData.v.set(0, 0, 0); }
+        if (--m.userData.life <= 0) { m.visible = false; scene.remove(m); bitPool.push(m); bits.splice(i, 1); }
+      }
+    },
+    reset() {
+      for (const m of flying.splice(0)) scene.remove(m);
+      for (const m of bits.splice(0)) { m.visible = false; scene.remove(m); bitPool.push(m); }
+      shake = 0; hitstop = 0; slow = 1; camera.position.copy(base);
+    },
+  };
+}
+
+// ===== src/hud.js =====
+function createHUD() {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;pointer-events:none;color:#cdd0d6;'
+    + 'font:16px ui-monospace,monospace';
+  wrap.innerHTML = `
+    <div style="position:absolute;top:16px;left:18px" id="dist">距离 0 m</div>
+    <div style="position:absolute;top:16px;right:18px;color:#8b9098" id="kills">碾过 0</div>
+    <div id="card" style="position:absolute;inset:0;display:none;align-items:center;
+      justify-content:center;flex-direction:column;gap:14px;background:#0e1014cc;
+      pointer-events:auto;text-align:center">
+      <div style="font-style:italic;color:#aeb2ba">这趟到此为止。下一趟照常发车。</div>
+      <div id="cardstats" style="color:#8b9098"></div>
+      <div style="color:#6b7078;font-size:13px">点击 / 按任意键 重开</div>
+    </div>
+    <div id="sub" style="position:absolute;left:0;right:0;bottom:54px;text-align:center;
+      font:italic 16px Georgia,'Songti SC',serif;color:#aeb2ba;opacity:0;transition:opacity .6s;
+      text-shadow:0 1px 4px #000;padding:0 24px"></div>`;
+  document.body.appendChild(wrap);
+  const $ = (id) => wrap.querySelector('#' + id);
+  let subT = null;
+  return {
+    say(text) {
+      const el = $('sub');
+      el.textContent = text;
+      el.style.opacity = '1';
+      clearTimeout(subT);
+      subT = setTimeout(() => { el.style.opacity = '0'; }, 3800);
+    },
+    set(distance, kills) {
+      $('dist').textContent = `距离 ${distance} m`;
+      $('kills').textContent = `碾过 ${kills}`;
+    },
+    showCard(distance, kills) {
+      $('cardstats').textContent = `距离 ${distance} m · 碾过 ${kills}`;
+      $('card').style.display = 'flex';
+    },
+    hideCard() { $('card').style.display = 'none'; },
+  };
+}
+
+// ===== src/input.js =====
+function attachInput(onSteer) {   // onSteer(-1 | +1)
+  addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') onSteer(-1);
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') onSteer(1);
+  });
+  let sx = 0;
+  addEventListener('touchstart', (e) => { sx = e.changedTouches[0].clientX; }, { passive: true });
+  addEventListener('touchend', (e) => {
+    const dx = e.changedTouches[0].clientX - sx;
+    if (Math.abs(dx) > 30) onSteer(dx > 0 ? 1 : -1);
+  }, { passive: true });
+}
+
+// ===== src/logic/collision.js =====
+function overlaps(trainLane, trainZ, entLane, entZ, zTol) {
+  return trainLane === entLane && Math.abs(trainZ - entZ) <= zTol;
+}
 
 // ===== src/logic/difficulty.js =====
 const BASE_SPEED = 0.34;   // 世界单位 / 帧 @60fps
@@ -32,9 +223,54 @@ function speedAt(distance) {
   return Math.min(MAX_SPEED, BASE_SPEED + Math.max(0, distance) * RAMP);
 }
 
-// ===== src/logic/collision.js =====
-function overlaps(trainLane, trainZ, entLane, entZ, zTol) {
-  return trainLane === entLane && Math.abs(trainZ - entZ) <= zTol;
+// ===== src/logic/gameState.js =====
+function createGame() {
+  return {
+    state: 'running',
+    derail() { if (this.state === 'running') this.state = 'dead'; },
+    reset() { this.state = 'running'; },
+  };
+}
+
+// ===== src/logic/lanes.js =====
+const LANE_COUNT = 3;
+const LANE_GAP = 4;              // 相邻车道 x 间距
+function laneX(i) { return (i - 1) * LANE_GAP; }
+function clampLane(i) { return Math.max(0, Math.min(LANE_COUNT - 1, i)); }
+function nextLane(current, dir) { return clampLane(current + Math.sign(dir)); }
+
+// ===== src/logic/narrator.js =====
+// 冷面旁白:跨越里程碑时吐一句平淡的话,否则沉默。纯逻辑,可 Node 测试。
+const KILL_LINES = [
+  [1, '第一个。系统未记录姓名。'],
+  [10, '它不会停,也不会等你。'],
+  [50, '前方依然没有目的地。'],
+  [100, '第 100 个。无人认领。'],
+  [250, '数字不再有意义。'],
+  [500, '你早就停不下来了。'],
+];
+const DIST_LINES = [
+  [400, '没有站台,没有终点。'],
+  [1200, '里程在涨。意义没有。'],
+  [3000, '它还在开。你也是。'],
+];
+
+function createNarrator() {
+  const fired = new Set();
+  function pick(table, value, prefix) {
+    for (const [thr, line] of table) {
+      const key = prefix + thr;
+      if (value >= thr && !fired.has(key)) { fired.add(key); return line; }
+    }
+    return null;
+  }
+  return {
+    // 碾压里程碑优先于距离里程碑;每条只触发一次;无事返回 null
+    update({ distance, kills }) {
+      return pick(KILL_LINES, kills, 'k') ?? pick(DIST_LINES, distance, 'd');
+    },
+    reset() { fired.clear(); },
+  };
 }
 
 // ===== src/logic/scoring.js =====
@@ -47,12 +283,20 @@ function createScore() {
   };
 }
 
-// ===== src/logic/gameState.js =====
-function createGame() {
+// ===== src/logic/settings.js =====
+// 极简设置:血腥度模式(风格化 / 写实),注入 storage 以便测试与持久化。
+const VALID = ['stylized', 'realistic'];
+
+function createSettings(storage) {
+  let mode = storage?.getItem?.('gore');
+  if (!VALID.includes(mode)) mode = 'stylized';
   return {
-    state: 'running',
-    derail() { if (this.state === 'running') this.state = 'dead'; },
-    reset() { this.state = 'running'; },
+    get gore() { return mode; },
+    cycle() {
+      mode = mode === 'stylized' ? 'realistic' : 'stylized';
+      storage?.setItem?.('gore', mode);
+      return mode;
+    },
   };
 }
 
@@ -70,6 +314,16 @@ function createSpawner({ gap, obstacleEvery, rng }) {
       return { lane, type };
     },
   };
+}
+
+// ===== src/obstacleView.js =====
+function makeObstacle(toon) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.2, 1.4), toon(0x55585f));
+  m.position.y = 1.1;
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),
+    new THREE.LineBasicMaterial({ color: 0x15171c }));
+  m.add(e);
+  return m;
 }
 
 // ===== src/scene.js =====
@@ -106,67 +360,6 @@ function createScene(canvas) {
   addEventListener('resize', resize); resize();
 
   return { renderer, scene, camera, toon, resize };
-}
-
-// ===== src/obstacleView.js =====
-function makeObstacle(toon) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.2, 1.4), toon(0x55585f));
-  m.position.y = 1.1;
-  const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),
-    new THREE.LineBasicMaterial({ color: 0x15171c }));
-  m.add(e);
-  return m;
-}
-
-// ===== src/victimView.js =====
-function makePerson(toon) {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.0, 3, 8), toon(0x9aa0a8));
-  body.position.y = 1.0; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), toon(0x9aa0a8));
-  head.position.y = 2.05; g.add(head);
-  return g;
-}
-
-function createEntities(scene, toon) {
-  const SPAWN_Z = -120;
-  const active = [];                 // {mesh, lane, type}
-  const pool = { person: [], obstacle: [] };
-
-  function obtain(type) {
-    const m = pool[type].pop() || (type === 'person' ? makePerson(toon) : makeObstacle(toon));
-    m.visible = true; scene.add(m); return m;
-  }
-  function recycle(item) {
-    item.mesh.visible = false; scene.remove(item.mesh);
-    pool[item.type].push(item.mesh);
-  }
-
-  return {
-    active,
-    spawn(type, lane) {
-      const mesh = obtain(type);
-      const baseY = type === 'person' ? 0 : 1.1;
-      mesh.position.set(laneX(lane), baseY, SPAWN_Z);
-      active.push({ mesh, lane, type });
-    },
-    update(speed) {
-      for (let i = active.length - 1; i >= 0; i--) {
-        const it = active[i];
-        it.mesh.position.z += speed;
-        if (it.mesh.position.z > 14) { recycle(it); active.splice(i, 1); }
-      }
-    },
-    kill(item) {                       // 从 active 移除,但不回收(交给 feedback 抛飞)
-      const idx = active.indexOf(item);
-      if (idx >= 0) active.splice(idx, 1);
-    },
-    reset() {                          // 清空当前局所有 active,回池
-      for (const it of active.splice(0)) {
-        it.mesh.visible = false; scene.remove(it.mesh); pool[it.type].push(it.mesh);
-      }
-    },
-  };
 }
 
 // ===== src/track.js =====
@@ -226,79 +419,54 @@ function createTrain(scene, toon) {
   };
 }
 
-// ===== src/input.js =====
-function attachInput(onSteer) {   // onSteer(-1 | +1)
-  addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') onSteer(-1);
-    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') onSteer(1);
-  });
-  let sx = 0;
-  addEventListener('touchstart', (e) => { sx = e.changedTouches[0].clientX; }, { passive: true });
-  addEventListener('touchend', (e) => {
-    const dx = e.changedTouches[0].clientX - sx;
-    if (Math.abs(dx) > 30) onSteer(dx > 0 ? 1 : -1);
-  }, { passive: true });
+// ===== src/victimView.js =====
+function makePerson(toon) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.0, 3, 8), toon(0x9aa0a8));
+  body.position.y = 1.0; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), toon(0x9aa0a8));
+  head.position.y = 2.05; g.add(head);
+  return g;
 }
 
-// ===== src/feedback.js =====
-function createFeedback(camera, scene) {
-  let shake = 0;
-  const base = camera.position.clone();
-  const flying = [];   // 被撞飞的 mesh,带 userData.vel / spin
+function createEntities(scene, toon) {
+  const SPAWN_Z = -120;
+  const active = [];                 // {mesh, lane, type}
+  const pool = { person: [], obstacle: [] };
+
+  function obtain(type) {
+    const m = pool[type].pop() || (type === 'person' ? makePerson(toon) : makeObstacle(toon));
+    m.visible = true; scene.add(m); return m;
+  }
+  function recycle(item) {
+    item.mesh.visible = false; scene.remove(item.mesh);
+    pool[item.type].push(item.mesh);
+  }
 
   return {
-    hit(mesh) {
-      shake = Math.min(0.6, shake + 0.25);
-      mesh.userData.vel = new THREE.Vector3((Math.random() - 0.5) * 0.3, 0.35, 0.25);
-      mesh.userData.spin = (Math.random() - 0.5) * 0.4;
-      flying.push(mesh);
+    active,
+    spawn(type, lane) {
+      const mesh = obtain(type);
+      const baseY = type === 'person' ? 0 : 1.1;
+      mesh.position.set(laneX(lane), baseY, SPAWN_Z);
+      active.push({ mesh, lane, type });
     },
-    update() {
-      // 镜头震
-      camera.position.set(
-        base.x + (Math.random() - 0.5) * shake,
-        base.y + (Math.random() - 0.5) * shake,
-        base.z);
-      shake *= 0.85; if (shake < 0.01) { shake = 0; camera.position.copy(base); }
-      // 抛飞体物理(落地移除)
-      for (let i = flying.length - 1; i >= 0; i--) {
-        const m = flying[i];
-        m.userData.vel.y -= 0.03;
-        m.position.add(m.userData.vel);
-        m.rotation.z += m.userData.spin;
-        if (m.position.y < -2) { scene.remove(m); flying.splice(i, 1); }
+    update(speed) {
+      for (let i = active.length - 1; i >= 0; i--) {
+        const it = active[i];
+        it.mesh.position.z += speed;
+        if (it.mesh.position.z > 14) { recycle(it); active.splice(i, 1); }
       }
     },
-  };
-}
-
-// ===== src/hud.js =====
-function createHUD() {
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:fixed;inset:0;pointer-events:none;color:#cdd0d6;'
-    + 'font:16px ui-monospace,monospace';
-  wrap.innerHTML = `
-    <div style="position:absolute;top:16px;left:18px" id="dist">距离 0 m</div>
-    <div style="position:absolute;top:16px;right:18px;color:#8b9098" id="kills">碾过 0</div>
-    <div id="card" style="position:absolute;inset:0;display:none;align-items:center;
-      justify-content:center;flex-direction:column;gap:14px;background:#0e1014cc;
-      pointer-events:auto;text-align:center">
-      <div style="font-style:italic;color:#aeb2ba">这趟到此为止。下一趟照常发车。</div>
-      <div id="cardstats" style="color:#8b9098"></div>
-      <div style="color:#6b7078;font-size:13px">点击 / 按任意键 重开</div>
-    </div>`;
-  document.body.appendChild(wrap);
-  const $ = (id) => wrap.querySelector('#' + id);
-  return {
-    set(distance, kills) {
-      $('dist').textContent = `距离 ${distance} m`;
-      $('kills').textContent = `碾过 ${kills}`;
+    kill(item) {                       // 从 active 移除,但不回收(交给 feedback 抛飞)
+      const idx = active.indexOf(item);
+      if (idx >= 0) active.splice(idx, 1);
     },
-    showCard(distance, kills) {
-      $('cardstats').textContent = `距离 ${distance} m · 碾过 ${kills}`;
-      $('card').style.display = 'flex';
+    reset() {                          // 清空当前局所有 active,回池
+      for (const it of active.splice(0)) {
+        it.mesh.visible = false; scene.remove(it.mesh); pool[it.type].push(it.mesh);
+      }
     },
-    hideCard() { $('card').style.display = 'none'; },
   };
 }
 
@@ -308,16 +476,19 @@ const { renderer, scene, camera, toon } = createScene(canvas);
 const track = createTrack(scene, toon);
 const train = createTrain(scene, toon);
 const entities = createEntities(scene, toon);
-const feedback = createFeedback(camera, scene);
+const settings = createSettings(typeof localStorage !== 'undefined' ? localStorage : null);
+const feedback = createFeedback(camera, scene, toon, () => settings.gore);
+const corpses = createCorpses(scene, toon, train.group);
 const hud = createHUD();
 
 const Z_TOL = 1.6;
 
-let spawner, score, game;
+let spawner, score, game, narrator;
 function newRun() {
   spawner = createSpawner({ gap: 9, obstacleEvery: 6, rng: Math.random });
   score = createScore();
   game = createGame();
+  narrator = createNarrator();
 }
 newRun();
 
@@ -328,6 +499,8 @@ attachInput((dir) => {
 function restart() {
   if (game.state !== 'dead') return;
   entities.reset();
+  corpses.reset();
+  feedback.reset();
   train.setLane(1);
   newRun();
   hud.hideCard();
@@ -335,21 +508,33 @@ function restart() {
 addEventListener('keydown', () => restart());
 addEventListener('click', () => restart());
 
+addEventListener('keydown', (e) => {
+  if (e.key === 'b' || e.key === 'B') {
+    const mode = settings.cycle();
+    hud.say(mode === 'realistic' ? '血腥度:写实' : '血腥度:风格化');
+  }
+});
+
 function step() {
   if (game.state !== 'running') return;
-  const speed = speedAt(score.distance);
+  const speed = speedAt(score.distance) * feedback.timeScale();
   score.advance(speed);
   const ev = spawner.update(speed);
   if (ev) entities.spawn(ev.type, ev.lane);
   track.update(speed);
   train.update();
   entities.update(speed);
+  corpses.update(speed);
 
   for (const it of [...entities.active]) {
     if (!overlaps(train.lane, train.z, it.lane, it.mesh.position.z, Z_TOL)) continue;
-    if (it.type === 'person') { entities.kill(it); feedback.hit(it.mesh); score.kill(); }
-    else { game.derail(); hud.showCard(score.distance, score.kills); }
+    if (it.type === 'person') {
+      entities.kill(it); feedback.hit(it.mesh); score.kill();
+      corpses.addGround(it.mesh.position.x, it.mesh.position.z); corpses.bumpPile();
+    } else { game.derail(); hud.showCard(score.distance, score.kills); }
   }
+  const line = narrator.update({ distance: score.distance, kills: score.kills });
+  if (line) hud.say(line);
   feedback.update();
   hud.set(score.distance, score.kills);
 }
@@ -360,8 +545,8 @@ function frame() {
   renderer.render(scene, camera);
 }
 frame();
-window.__ditie = { train, entities, step, getScore: () => score, getGame: () => game };
-console.log('[ditie] phase1 ok');
+window.__ditie = { train, entities, corpses, settings, feedback, step, getScore: () => score, getGame: () => game };
+console.log('[ditie] phase2 ok');
 </script>
 </body>
 </html>

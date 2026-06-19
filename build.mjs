@@ -1,32 +1,28 @@
 // build.mjs — 把 src 模块打包成单文件 play.html(可 file:// 直接打开,零依赖)
+// 自动发现 src 下所有 .js(排除 *.test.js),main.js 置末(它在顶层立即执行,依赖其余全部)。
 // 用法: node build.mjs
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const read = (f) => readFileSync(join(root, f), 'utf8');
 
-// 依赖顺序(被依赖的在前,main 最后)
-const order = [
-  'src/logic/lanes.js',
-  'src/logic/difficulty.js',
-  'src/logic/collision.js',
-  'src/logic/scoring.js',
-  'src/logic/gameState.js',
-  'src/logic/spawner.js',
-  'src/scene.js',
-  'src/obstacleView.js',
-  'src/victimView.js',
-  'src/track.js',
-  'src/trainView.js',
-  'src/input.js',
-  'src/feedback.js',
-  'src/hud.js',
-  'src/main.js',
-];
+function listJs(dir) {
+  const out = [];
+  for (const name of readdirSync(join(root, dir))) {
+    const rel = `${dir}/${name}`;
+    if (statSync(join(root, rel)).isDirectory()) out.push(...listJs(rel));
+    else if (name.endsWith('.js') && !name.endsWith('.test.js')) out.push(rel);
+  }
+  return out;
+}
 
-const body = order.map((f) => {
+// 其余模块只是函数声明 + 字面量常量(运行期才被调用),顺序无所谓;只需保证 main.js 最后。
+const files = listJs('src').filter((f) => f !== 'src/main.js');
+files.push('src/main.js');
+
+const body = files.map((f) => {
   const code = read(f)
     .split('\n')
     .filter((l) => !/^\s*import\s.*\bfrom\b.*$/.test(l))   // 去掉所有 import 行(本地 + three)
@@ -61,4 +57,4 @@ ${body}
 `;
 
 writeFileSync(join(root, 'play.html'), html);
-console.log('built play.html (' + html.length + ' bytes)');
+console.log(`built play.html (${html.length} bytes) from ${files.length} modules: ${files.map((f) => f.replace('src/', '')).join(', ')}`);
