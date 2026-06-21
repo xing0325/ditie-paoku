@@ -21,10 +21,10 @@ import * as THREE from 'three';
 // 一具瘫软的尸体(低面):横躺的身体 + 偏置的头
 function crumpled(toon, color) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.7, 3, 6), toon(color));
-  body.rotation.z = Math.PI / 2; body.position.y = 0.32; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 8, 6), toon(color));
-  head.position.set(0.7, 0.3, 0); g.add(head);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.42, 1.0), toon(color));
+  body.position.y = 0.21; g.add(body);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), toon(color));
+  head.position.set(0.55, 0.2, 0.12); g.add(head);
   return g;
 }
 
@@ -74,6 +74,67 @@ function createCorpses(scene, toon, trainGroup) {
   }
 
   return { addGround, bumpPile, update, reset, get pileN() { return pileN; } };
+}
+
+// ===== src/environment.js =====
+// 环境氛围:钢轨 + 滚动站台灯(暖色光斑)+ 远侧暗柱。把"工地"变成"夜里的地铁"。
+function createEnvironment(scene, toon) {
+  const group = new THREE.Group();
+  scene.add(group);
+
+  // 钢轨:每条车道两条,静态长条
+  const railMat = toon(0x575d66);
+  for (let i = 0; i < LANE_COUNT; i++) {
+    for (const dx of [-0.7, 0.7]) {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 320), railMat);
+      r.position.set(laneX(i) + dx, 0.09, -130);
+      group.add(r);
+    }
+  }
+
+  const SIDE = (LANE_COUNT * 4) / 2 + 2.4;
+
+  // 站台灯柱(滚动回收)+ 地面暖色光斑(加色混合的扁圆,廉价又出氛围,不用真光源)
+  const lamps = [];
+  const LSPAN = 9, LSTEP = 24;
+  const poolMat = new THREE.MeshBasicMaterial({
+    color: 0xff9a3c, transparent: true, opacity: 0.20,
+    depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  for (let i = 0; i < LSPAN; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const lamp = new THREE.Group();
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 5.4, 0.22), toon(0x14171e));
+    post.position.y = 2.7; lamp.add(post);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.18, 0.18), toon(0x14171e));
+    arm.position.set(-side * 0.75, 5.1, 0); lamp.add(arm);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 0.5),
+      new THREE.MeshBasicMaterial({ color: 0xffd089 }));
+    head.position.set(-side * 1.4, 5.0, 0); lamp.add(head);
+    const pool = new THREE.Mesh(new THREE.CircleGeometry(3.4, 18), poolMat);
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.set(-side * 1.4, 0.06, 0); lamp.add(pool);
+    lamp.position.set(side * SIDE, 0, -i * LSTEP);
+    group.add(lamp); lamps.push(lamp);
+  }
+
+  // 远侧暗柱:隧道/站台结构感,滚动回收
+  const pillars = [];
+  const PSPAN = 12, PSTEP = 15, PSIDE = SIDE + 3.8;
+  const pillarMat = toon(0x0f1218);
+  for (let i = 0; i < PSPAN; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(1.4, 9.5, 1.4), pillarMat);
+    p.position.set(side * PSIDE, 4.75, -i * PSTEP);
+    group.add(p); pillars.push(p);
+  }
+
+  function update(speed) {
+    for (const l of lamps) { l.position.z += speed; if (l.position.z > 14) l.position.z -= LSPAN * LSTEP; }
+    for (const p of pillars) { p.position.z += speed; if (p.position.z > 16) p.position.z -= PSPAN * PSTEP; }
+  }
+
+  return { update };
 }
 
 // ===== src/feedback.js =====
@@ -161,6 +222,8 @@ function createHUD() {
   wrap.style.cssText = 'position:fixed;inset:0;pointer-events:none;color:#cdd0d6;'
     + 'font:16px ui-monospace,monospace';
   wrap.innerHTML = `
+    <div style="position:absolute;inset:0;pointer-events:none;
+      background:radial-gradient(ellipse 78% 78% at 50% 44%, transparent 56%, #000000bb 100%)"></div>
     <div style="position:absolute;top:16px;left:18px" id="dist">距离 0 m</div>
     <div style="position:absolute;top:16px;right:18px;color:#8b9098" id="kills">碾过 0</div>
     <div id="card" style="position:absolute;inset:0;display:none;align-items:center;
@@ -332,20 +395,25 @@ function createScene(canvas) {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0e1014);
-  scene.fog = new THREE.Fog(0x0e1014, 18, 60);
+  // 冷夜地铁:近黑冷蓝底 + 同色雾做纵深递退
+  const cold = 0x0a0d14;
+  scene.background = new THREE.Color(cold);
+  scene.fog = new THREE.Fog(cold, 22, 80);
 
-  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200);
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 220);
   camera.position.set(0, 5.2, 9.5);
   camera.lookAt(0, 1.2, -12);
 
-  scene.add(new THREE.AmbientLight(0x5a6680, 0.55));
-  const dir = new THREE.DirectionalLight(0xffe9c0, 1.15);
-  dir.position.set(-7, 13, 5);
-  scene.add(dir);
+  // 灯光:冷月光主光 + 半球环境(冷天蓝顶 / 暗地)+ 一抹钠灯暖补光
+  const hemi = new THREE.HemisphereLight(0x36425e, 0x090a0d, 0.6);
+  scene.add(hemi);
+  const key = new THREE.DirectionalLight(0xbcd0ff, 0.9);
+  key.position.set(-8, 16, 6); scene.add(key);
+  const warm = new THREE.DirectionalLight(0xffb060, 0.3);
+  warm.position.set(7, 3, 11); scene.add(warm);
 
-  // stepped toon gradient (三渲二)
-  const g = new Uint8Array([55, 110, 185, 255]);
+  // 三渲二阶梯渐变:暗部压深、冷,四档
+  const g = new Uint8Array([38, 90, 150, 230]);
   const gradMap = new THREE.DataTexture(g, g.length, 1, THREE.RedFormat);
   gradMap.minFilter = gradMap.magFilter = THREE.NearestFilter;
   gradMap.needsUpdate = true;
@@ -394,15 +462,52 @@ function createTrack(scene, toon) {
 }
 
 // ===== src/trainView.js =====
+// 钝铁块无脸地铁:冷钢两色 + 暗赭腰线;前脸暖灯眼 + 排障器,车尾红灯(玩家主要看到车尾+车顶)
 function createTrain(scene, toon) {
   const train = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.6, 5.2), toon(0xc98a3a));
-  body.position.y = 1.5; train.add(body);
-  const ws = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.0, 0.22), toon(0x14161c));
-  ws.position.set(0, 1.95, -2.6); train.add(ws);
+  const STEEL = 0x49515d, STEEL_TOP = 0x59626e, ACCENT = 0xc98a3a, DARK = 0x0c0f14;
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.2, 5.2), toon(STEEL));
+  body.position.y = 1.4; train.add(body);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.5, 5.0), toon(STEEL_TOP));
+  roof.position.y = 2.65; train.add(roof);
+
+  // 侧腰线(暗赭强调)
+  for (const sx of [-1.61, 1.61]) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.34, 5.0), toon(ACCENT));
+    stripe.position.set(sx, 1.55, 0); train.add(stripe);
+  }
+  // 车顶空调(低面细节)
+  for (const dz of [-1.4, 0.4]) {
+    const ac = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.32, 1.1), toon(0x3a414b));
+    ac.position.set(0, 2.96, dz); train.add(ac);
+  }
+
+  // 前脸(朝前 -z,迎向被碾的人):挡风玻璃 + 暖灯眼 + 排障器
+  const ws = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.95, 0.18), toon(DARK));
+  ws.position.set(0, 1.95, -2.62); train.add(ws);
+  for (const sx of [-0.85, 0.85]) {
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.34, 0.16),
+      new THREE.MeshBasicMaterial({ color: 0xfff1c0 }));
+    eye.position.set(sx, 0.95, -2.64); train.add(eye);
+  }
+  const plow = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.7, 0.55), toon(0x2b3037));
+  plow.position.set(0, 0.5, -2.7); train.add(plow);
+
+  // 车尾(朝向相机 +z):尾窗 + 两盏红灯
+  const rw = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.9, 0.18), toon(DARK));
+  rw.position.set(0, 1.95, 2.62); train.add(rw);
+  for (const sx of [-0.9, 0.9]) {
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.28, 0.16),
+      new THREE.MeshBasicMaterial({ color: 0xc0241f }));
+    tl.position.set(sx, 1.0, 2.64); train.add(tl);
+  }
+
+  // 描边(主车身,三渲二)
   const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(body.geometry), new THREE.LineBasicMaterial({ color: 0x15171c }));
+    new THREE.EdgesGeometry(body.geometry), new THREE.LineBasicMaterial({ color: 0x090b0f }));
   edges.position.copy(body.position); train.add(edges);
+
   train.position.set(laneX(1), 0, 2);
   scene.add(train);
 
@@ -420,12 +525,25 @@ function createTrain(scene, toon) {
 }
 
 // ===== src/victimView.js =====
+const COATS = [0x5b6470, 0x6b5d52, 0x4f5a52, 0x6a5563, 0x566070, 0x615a4e];
 function makePerson(toon) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.0, 3, 8), toon(0x9aa0a8));
-  body.position.y = 1.0; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), toon(0x9aa0a8));
-  head.position.y = 2.05; g.add(head);
+  const coat = COATS[(Math.random() * COATS.length) | 0];
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.5), toon(coat));
+  torso.position.y = 1.05; g.add(torso);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.46, 0.42), toon(0xc1a386));
+  head.position.y = 1.92; g.add(head);
+  for (const sx of [-0.18, 0.18]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.7, 0.3), toon(0x2f343c));
+    leg.position.set(sx, 0.35, 0); g.add(leg);
+  }
+  for (const sx of [-0.46, 0.46]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.9, 0.24), toon(coat));
+    arm.position.set(sx, 1.05, 0); g.add(arm);
+  }
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(torso.geometry),
+    new THREE.LineBasicMaterial({ color: 0x14171c }));
+  e.position.copy(torso.position); g.add(e);
   return g;
 }
 
@@ -474,6 +592,7 @@ function createEntities(scene, toon) {
 const canvas = document.getElementById('c');
 const { renderer, scene, camera, toon } = createScene(canvas);
 const track = createTrack(scene, toon);
+const environment = createEnvironment(scene, toon);
 const train = createTrain(scene, toon);
 const entities = createEntities(scene, toon);
 const settings = createSettings(typeof localStorage !== 'undefined' ? localStorage : null);
@@ -522,6 +641,7 @@ function step() {
   const ev = spawner.update(speed);
   if (ev) entities.spawn(ev.type, ev.lane);
   track.update(speed);
+  environment.update(speed);
   train.update();
   entities.update(speed);
   corpses.update(speed);

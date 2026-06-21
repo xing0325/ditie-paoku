@@ -3,6 +3,8 @@ export function createHUD() {
   wrap.style.cssText = 'position:fixed;inset:0;pointer-events:none;color:#cdd0d6;'
     + 'font:16px ui-monospace,monospace';
   wrap.innerHTML = `
+    <div style="position:absolute;inset:0;pointer-events:none;
+      background:radial-gradient(ellipse 78% 78% at 50% 44%, transparent 56%, #000000bb 100%)"></div>
     <div style="position:absolute;top:16px;left:18px" id="dist">距离 0 m</div>
     <div style="position:absolute;top:16px;right:18px;color:#8b9098" id="kills">碾过 0</div>
     <div id="card" style="position:absolute;inset:0;display:none;align-items:center;

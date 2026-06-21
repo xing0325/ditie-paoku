@@ -2,12 +2,25 @@ import * as THREE from 'three';
 import { laneX } from './logic/lanes.js';
 import { makeObstacle } from './obstacleView.js';
 
+const COATS = [0x5b6470, 0x6b5d52, 0x4f5a52, 0x6a5563, 0x566070, 0x615a4e];
 function makePerson(toon) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.0, 3, 8), toon(0x9aa0a8));
-  body.position.y = 1.0; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), toon(0x9aa0a8));
-  head.position.y = 2.05; g.add(head);
+  const coat = COATS[(Math.random() * COATS.length) | 0];
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.5), toon(coat));
+  torso.position.y = 1.05; g.add(torso);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.46, 0.42), toon(0xc1a386));
+  head.position.y = 1.92; g.add(head);
+  for (const sx of [-0.18, 0.18]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.7, 0.3), toon(0x2f343c));
+    leg.position.set(sx, 0.35, 0); g.add(leg);
+  }
+  for (const sx of [-0.46, 0.46]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.9, 0.24), toon(coat));
+    arm.position.set(sx, 1.05, 0); g.add(arm);
+  }
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(torso.geometry),
+    new THREE.LineBasicMaterial({ color: 0x14171c }));
+  e.position.copy(torso.position); g.add(e);
   return g;
 }
 

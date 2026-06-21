@@ -3,10 +3,10 @@ import * as THREE from 'three';
 // 一具瘫软的尸体(低面):横躺的身体 + 偏置的头
 function crumpled(toon, color) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.7, 3, 6), toon(color));
-  body.rotation.z = Math.PI / 2; body.position.y = 0.32; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 8, 6), toon(color));
-  head.position.set(0.7, 0.3, 0); g.add(head);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.42, 1.0), toon(color));
+  body.position.y = 0.21; g.add(body);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), toon(color));
+  head.position.set(0.55, 0.2, 0.12); g.add(head);
   return g;
 }
 

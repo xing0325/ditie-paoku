@@ -14,10 +14,12 @@ import { createGame } from './logic/gameState.js';
 import { createNarrator } from './logic/narrator.js';
 import { createCorpses } from './corpses.js';
 import { createSettings } from './logic/settings.js';
+import { createEnvironment } from './environment.js';
 
 const canvas = document.getElementById('c');
 const { renderer, scene, camera, toon } = createScene(canvas);
 const track = createTrack(scene, toon);
+const environment = createEnvironment(scene, toon);
 const train = createTrain(scene, toon);
 const entities = createEntities(scene, toon);
 const settings = createSettings(typeof localStorage !== 'undefined' ? localStorage : null);
@@ -66,6 +68,7 @@ function step() {
   const ev = spawner.update(speed);
   if (ev) entities.spawn(ev.type, ev.lane);
   track.update(speed);
+  environment.update(speed);
   train.update();
   entities.update(speed);
   corpses.update(speed);
